@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Revenue Format</title>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- SheetJS with Styles -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.min.js"></script>
+    
+    <style>
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+    </style>
+</head>
+<body class="bg-gray-50 text-slate-800">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- Icons defined inline to prevent loading errors ---
+        const Upload = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+        );
+        const FileSpreadsheet = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M4 22h14a2 2 0 0 0 2-2V7.5L14.5 2H6a2 2 0 0 0-2 2v4"/><path d="M14 2v6h6"/><path d="M4 15h11"/><path d="M4 18h11"/><path d="M4 12h11"/></svg>
+        );
+        const Download = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+        );
+        const CheckSquare = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        );
+        const AlertCircle = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+        );
+        const ArrowRight = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="5" x2="19" y1="12" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        );
+        const Loader2 = (props) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+        );
+
+        function App() {
+            const [file, setFile] = useState(null);
+            const [hasHeader, setHasHeader] = useState(true);
+            const [processedWorkbook, setProcessedWorkbook] = useState(null);
+            const [isProcessing, setIsProcessing] = useState(false);
+            const [error, setError] = useState('');
+            const [previewData, setPreviewData] = useState([]);
+            
+            // Keywords that identify a row as a DATA row (not a Justice header)
+            const NON_JUSTICE_KEYWORDS = ['c/w', 'cw', 'with', 'nil'];
+
+            const handleFileUpload = (e) => {
+                const uploadedFile = e.target.files[0];
+                if (uploadedFile) {
+                    setFile(uploadedFile);
+                    setProcessedWorkbook(null);
+                    setError('');
+                    setPreviewData([]);
+                }
+            };
+
+            const isJusticeHeaderRow = (cellValue) => {
+                if (!cellValue) return false;
+                const strVal = String(cellValue).trim().toLowerCase();
+                
+                // Check if it's a number
+                if (!isNaN(parseFloat(strVal)) && isFinite(strVal)) return false;
+                
+                // Check keywords
+                if (NON_JUSTICE_KEYWORDS.includes(strVal)) return false;
+
+                // If it's not a number and not a keyword, it's a Justice/Section Header
+                return true;
+            };
+
+            const processFile = async () => {
+                if (!file) return;
+                setIsProcessing(true);
+                setError('');
+
+                try {
+                    // Access the global XLSX variable loaded via script tag
+                    const XLSX = window.XLSX;
+                    const data = await file.arrayBuffer();
+                    const workbook = XLSX.read(data);
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    let jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+
+                    if (hasHeader && jsonData.length > 0) {
+                        jsonData.shift();
+                    }
+
+                    const newRows = [];
+                    const merges = [];
+                    const headerRowIndices = []; 
+
+                    // Process row by row
+                    jsonData.forEach((row, rowIndex) => {
+                        const colA = row[0];
+                        
+                        if (isJusticeHeaderRow(colA)) {
+                            // Header Row Logic
+                            const newRow = [colA, "", "", "", ""]; 
+                            newRows.push(newRow);
+
+                            const currentRowIndex = newRows.length - 1;
+
+                            merges.push({
+                                s: { r: currentRowIndex, c: 0 },
+                                e: { r: currentRowIndex, c: 3 } 
+                            });
+
+                            headerRowIndices.push(currentRowIndex);
+
+                        } else {
+                            // Data Row Logic
+                            const valB = row[1] || "";
+                            const valC = row[2] || "";
+                            const newColB = `${valB} ${valC}`.trim();
+
+                            const valD = String(row[3] || "");
+                            const words = valD.split(/\s+/).filter(w => w.length > 0);
+                            const firstFourWords = words.slice(0, 4).join(" ");
+                            const newColC = firstFourWords ? `${firstFourWords} (Revenue)` : "";
+
+                            const newRow = [
+                                colA,           
+                                newColB,        
+                                newColC,        
+                                row[4],         
+                                row[5],         
+                                row[6]          
+                            ];
+
+                            newRows.push(newRow);
+                        }
+                    });
+
+                    // Create New Worksheet
+                    const newWorksheet = XLSX.utils.aoa_to_sheet(newRows);
+
+                    // Apply Merges
+                    if (merges.length > 0) {
+                        newWorksheet['!merges'] = merges;
+                    }
+
+                    // Apply Styles
+                    const range = XLSX.utils.decode_range(newWorksheet['!ref']);
+                    
+                    for (let R = range.s.r; R <= range.e.r; ++R) {
+                        const isHeader = headerRowIndices.includes(R);
+                        
+                        for (let C = range.s.c; C <= range.e.c; ++C) {
+                            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                            if (!newWorksheet[cellRef]) continue; 
+
+                            if (!newWorksheet[cellRef].s) newWorksheet[cellRef].s = {};
+
+                            if (isHeader) {
+                                newWorksheet[cellRef].s = {
+                                    font: { bold: true, sz: 11 },
+                                    alignment: { horizontal: "center", vertical: "center" }
+                                };
+                            } else {
+                                newWorksheet[cellRef].s = {
+                                    alignment: { horizontal: "left", vertical: "center" }
+                                };
+                            }
+                        }
+                    }
+
+                    const newWorkbook = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, "ProcessedData");
+
+                    setProcessedWorkbook(newWorkbook);
+                    setPreviewData(newRows.slice(0, 10));
+
+                } catch (err) {
+                    console.error(err);
+                    setError('Failed to process file. Please ensure it is a valid Excel or CSV file.');
+                } finally {
+                    setIsProcessing(false);
+                }
+            };
+
+            const downloadFile = () => {
+                if (!processedWorkbook || !window.XLSX) return;
+                window.XLSX.writeFile(processedWorkbook, "Processed_Causelist.xlsx");
+            };
+
+            return (
+                <div className="min-h-screen p-4">
+                    <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
+                        
+                        {/* Header */}
+                        <div className="bg-blue-600 p-6 text-white">
+                            <h1 className="text-2xl font-bold flex items-center gap-2">
+                                <FileSpreadsheet className="w-8 h-8" />
+                                Revenue Format
+                            </h1>
+                            <p className="text-blue-100 mt-2">
+                                Formatting for Revenue Causelist.
+                            </p>
+                        </div>
+
+                        <div className="p-6 space-y-8">
+                            
+                            {/* Step 1: Upload */}
+                            <div className="space-y-4">
+                                <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
+                                    <span className="bg-blue-100 text-blue-600 w-6 h-6 rounded-full flex items-center justify-center text-sm">1</span>
+                                    Upload File
+                                </h2>
+                                
+                                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:bg-gray-50 transition-colors">
+                                    <input 
+                                        type="file" 
+                                        accept=".xlsx, .xls, .csv" 
+                                        onChange={handleFileUpload}
+                                        className="hidden" 
+                                        id="fileInput"
+                                    />
+                                    <label htmlFor="fileInput" className="cursor-pointer flex flex-col items-center gap-2">
+                                        <Upload className="w-10 h-10 text-gray-400" />
+                                        <span className="text-sm font-medium text-blue-600 hover:text-blue-700">
+                                            Click to upload Excel/CSV
+                                        </span>
+                                        <span className="text-xs text-gray-400">
+                                            {file ? file.name : "No file selected"}
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Step 2: Settings */}
+                            {file && (
+                                <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                                    <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
+                                        <span className="bg-blue-100 text-blue-600 w-6 h-6 rounded-full flex items-center justify-center text-sm">2</span>
+                                        Configuration
+                                    </h2>
+                                    
+                                    <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                                        <input 
+                                            type="checkbox" 
+                                            id="headerCheck" 
+                                            checked={hasHeader}
+                                            onChange={(e) => setHasHeader(e.target.checked)}
+                                            className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                                        />
+                                        <label htmlFor="headerCheck" className="flex items-center gap-2 cursor-pointer">
+                                            <CheckSquare className="w-5 h-5 text-gray-500" />
+                                            <div>
+                                                <span className="font-medium text-gray-700">Remove Header Row?</span>
+                                                <p className="text-xs text-gray-500">Check this if the first row of your sheet contains column titles like "S.No", "Case Type", etc.</p>
+                                            </div>
+                                        </label>
+                                    </div>
+
+                                    <button 
+                                        onClick={processFile}
+                                        disabled={isProcessing}
+                                        className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium shadow-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                                    >
+                                        {isProcessing ? 
+                                            <span className="flex items-center gap-2"><Loader2 className="animate-spin w-4 h-4"/> Processing...</span> 
+                                            : 
+                                            <span className="flex items-center gap-2">Process Excel Sheet <ArrowRight className="w-4 h-4" /></span>
+                                        }
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Error Message */}
+                            {error && (
+                                <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-2">
+                                    <AlertCircle className="w-5 h-5" />
+                                    {error}
+                                </div>
+                            )}
+
+                            {/* Step 3: Preview & Download */}
+                            {processedWorkbook && (
+                                <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                                    <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
+                                        <span className="bg-green-100 text-green-600 w-6 h-6 rounded-full flex items-center justify-center text-sm">3</span>
+                                        Result
+                                    </h2>
+
+                                    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                                        <div className="p-3 bg-gray-50 border-b border-gray-200 font-medium text-sm text-gray-500 flex justify-between items-center">
+                                            <span>Preview (First 10 rows)</span>
+                                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">Modified Column C + (Revenue)</span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm text-left">
+                                                <thead className="bg-gray-50 text-xs text-gray-500 uppercase">
+                                                    <tr>
+                                                        <th className="px-4 py-2">Col A</th>
+                                                        <th className="px-4 py-2">Merged (B+C)</th>
+                                                        <th className="px-4 py-2">Mod. D</th>
+                                                        <th className="px-4 py-2">Col E</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-100">
+                                                    {previewData.map((row, idx) => {
+                                                        const isHeader = isJusticeHeaderRow(row[0]);
+                                                        return (
+                                                            <tr key={idx} className={isHeader ? "bg-yellow-50 font-bold" : "hover:bg-gray-50"}>
+                                                                {row.slice(0, 5).map((cell, cIdx) => (
+                                                                    <td 
+                                                                        key={cIdx} 
+                                                                        className={`px-4 py-2 whitespace-nowrap max-w-[200px] overflow-hidden text-ellipsis ${cIdx === 0 && isHeader ? 'text-blue-800 text-center' : 'text-left'}`}
+                                                                        colSpan={isHeader && cIdx === 0 ? 4 : 1}
+                                                                        style={{ display: (isHeader && cIdx > 0 && cIdx < 4) ? 'none' : 'table-cell' }}
+                                                                    >
+                                                                        {cell || (isHeader && cIdx >= 4 ? "" : "-")}
+                                                                    </td>
+                                                                ))}
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+
+                                    <button 
+                                        onClick={downloadFile}
+                                        className="w-full py-4 px-4 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold text-lg shadow-md flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                                    >
+                                        <Download className="w-6 h-6" />
+                                        Download Processed Excel
+                                    </button>
+                                </div>
+                            )}
+
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
