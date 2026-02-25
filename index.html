@@ -17,11 +17,6 @@
     
     <!-- SheetJS with Styles -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.min.js"></script>
-    
-    <style>
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        .animate-spin { animation: spin 1s linear infinite; }
-    </style>
 </head>
 <body class="bg-gray-50 text-slate-800">
     <div id="root"></div>
@@ -73,17 +68,16 @@
                 }
             };
 
-            const isJusticeHeaderRow = (cellValue) => {
-                if (!cellValue) return false;
-                const strVal = String(cellValue).trim().toLowerCase();
+            const isJusticeHeaderRow = (val) => {
+                if (val === null || val === undefined) return false;
                 
-                // Check if it's a number
-                if (!isNaN(parseFloat(strVal)) && isFinite(strVal)) return false;
+                const actualVal = (typeof val === 'object' && val.v !== undefined) ? val.v : val;
+                const lowerStr = String(actualVal).trim().toLowerCase();
                 
-                // Check keywords
-                if (NON_JUSTICE_KEYWORDS.includes(strVal)) return false;
+                if (!lowerStr) return false;
+                if (!isNaN(parseFloat(lowerStr)) && isFinite(lowerStr)) return false;
+                if (NON_JUSTICE_KEYWORDS.includes(lowerStr)) return false;
 
-                // If it's not a number and not a keyword, it's a Justice/Section Header
                 return true;
             };
 
@@ -93,80 +87,88 @@
                 setError('');
 
                 try {
-                    // Access the global XLSX variable loaded via script tag
                     const XLSX = window.XLSX;
                     const data = await file.arrayBuffer();
-                    const workbook = XLSX.read(data);
+                    
+                    const workbook = XLSX.read(data, { raw: true });
                     const firstSheetName = workbook.SheetNames[0];
                     const worksheet = workbook.Sheets[firstSheetName];
                     
-                    let jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+                    const range = XLSX.utils.decode_range(worksheet['!ref']);
+                    const originalRows = [];
+                    
+                    for (let R = range.s.r; R <= range.e.r; ++R) {
+                        const row = [];
+                        for (let C = range.s.c; C <= range.e.c; ++C) {
+                            const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+                            row.push(worksheet[cellRef]);
+                        }
+                        originalRows.push(row);
+                    }
 
-                    if (hasHeader && jsonData.length > 0) {
-                        jsonData.shift();
+                    if (hasHeader && originalRows.length > 0) {
+                        originalRows.shift();
                     }
 
                     const newRows = [];
                     const merges = [];
                     const headerRowIndices = []; 
 
-                    // Process row by row
-                    jsonData.forEach((row, rowIndex) => {
-                        const colA = row[0];
+                    const cloneCell = (cell) => {
+                        if (cell === null || cell === undefined) return "";
+                        if (typeof cell !== 'object') return cell; 
+                        if (cell.v === undefined) return "";
+                        const cloned = { v: cell.v, t: cell.t };
+                        if (cell.z) cloned.z = cell.z;
+                        return cloned;
+                    };
+
+                    const getFormattedText = (cell) => {
+                        if (cell === null || cell === undefined) return "";
+                        if (typeof cell !== 'object') return String(cell).trim();
+                        if (cell.w !== undefined) return String(cell.w).trim();
+                        return String(cell.v !== undefined ? cell.v : "").trim();
+                    };
+
+                    originalRows.forEach((rowCells) => {
+                        if (rowCells.every(c => c === null || c === undefined || (typeof c === 'object' && c.v === undefined) || (typeof c === 'object' && c.v === ""))) return;
+
+                        const cellA = rowCells[0];
+                        const textA = getFormattedText(cellA);
                         
-                        if (isJusticeHeaderRow(colA)) {
-                            // Header Row Logic
-                            const newRow = [colA, "", "", "", ""]; 
-                            newRows.push(newRow);
-
+                        if (isJusticeHeaderRow(textA)) {
+                            newRows.push([{ t: 's', v: textA, z: '@' }, "", "", "", ""]); 
                             const currentRowIndex = newRows.length - 1;
-
-                            merges.push({
-                                s: { r: currentRowIndex, c: 0 },
-                                e: { r: currentRowIndex, c: 3 } 
-                            });
-
+                            merges.push({ s: { r: currentRowIndex, c: 0 }, e: { r: currentRowIndex, c: 3 } });
                             headerRowIndices.push(currentRowIndex);
-
                         } else {
-                            // Data Row Logic
-                            const valB = row[1] || "";
-                            const valC = row[2] || "";
-                            const newColB = `${valB} ${valC}`.trim();
+                            const textB = getFormattedText(rowCells[1]);
+                            const textC = getFormattedText(rowCells[2]);
+                            const newColB = `${textB} ${textC}`.trim();
 
-                            const valD = String(row[3] || "");
-                            const words = valD.split(/\s+/).filter(w => w.length > 0);
+                            const textD = getFormattedText(rowCells[3]);
+                            const words = textD.split(/\s+/).filter(w => w.length > 0);
                             const firstFourWords = words.slice(0, 4).join(" ");
                             const newColC = firstFourWords ? `${firstFourWords} (Revenue)` : "";
 
-                            const newRow = [
-                                colA,           
-                                newColB,        
-                                newColC,        
-                                row[4],         
-                                row[5],         
-                                row[6]          
-                            ];
-
-                            newRows.push(newRow);
+                            newRows.push([
+                                cloneCell(cellA),
+                                { t: 's', v: newColB, z: '@' },
+                                { t: 's', v: newColC, z: '@' },
+                                cloneCell(rowCells[4]),
+                                cloneCell(rowCells[5]),
+                                cloneCell(rowCells[6])
+                            ]);
                         }
                     });
 
-                    // Create New Worksheet
                     const newWorksheet = XLSX.utils.aoa_to_sheet(newRows);
+                    newWorksheet['!merges'] = merges;
 
-                    // Apply Merges
-                    if (merges.length > 0) {
-                        newWorksheet['!merges'] = merges;
-                    }
-
-                    // Apply Styles
-                    const range = XLSX.utils.decode_range(newWorksheet['!ref']);
-                    
-                    for (let R = range.s.r; R <= range.e.r; ++R) {
+                    const newRange = XLSX.utils.decode_range(newWorksheet['!ref']);
+                    for (let R = newRange.s.r; R <= newRange.e.r; ++R) {
                         const isHeader = headerRowIndices.includes(R);
-                        
-                        for (let C = range.s.c; C <= range.e.c; ++C) {
+                        for (let C = newRange.s.c; C <= newRange.e.c; ++C) {
                             const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
                             if (!newWorksheet[cellRef]) continue; 
 
@@ -182,8 +184,28 @@
                                     alignment: { horizontal: "left", vertical: "center" }
                                 };
                             }
+
+                            if (!isHeader && (C === 1 || C === 2)) {
+                                newWorksheet[cellRef].z = '@';
+                            }
                         }
                     }
+
+                    newWorksheet['!pageSetup'] = {
+                        fitToPage: true,
+                        fitToWidth: 1,
+                        fitToHeight: 0, 
+                        orientation: 'portrait'
+                    };
+
+                    newWorksheet['!margins'] = {
+                        left: 0.25, right: 0.25,
+                        top: 0.75, bottom: 0.75,
+                        header: 0.3, footer: 0.3
+                    };
+
+                    // Set all row heights to exactly 30px
+                    newWorksheet['!rows'] = newRows.map(() => ({ hpx: 30 }));
 
                     const newWorkbook = XLSX.utils.book_new();
                     XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, "ProcessedData");
@@ -203,12 +225,22 @@
                 if (!processedWorkbook || !window.XLSX) return;
                 window.XLSX.writeFile(processedWorkbook, "Processed_Causelist.xlsx");
             };
+            
+            const formatForPreview = (cell) => {
+                if (cell === null || cell === undefined) return "";
+                if (typeof cell === 'string' || typeof cell === 'number') return String(cell);
+                if (cell.w) return String(cell.w);
+                if (cell.v !== undefined) {
+                    if (cell.v instanceof Date) return cell.v.toLocaleDateString();
+                    return String(cell.v);
+                }
+                return "";
+            };
 
             return (
                 <div className="min-h-screen p-4">
                     <div className="max-w-4xl mx-auto bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100">
                         
-                        {/* Header */}
                         <div className="bg-blue-600 p-6 text-white">
                             <h1 className="text-2xl font-bold flex items-center gap-2">
                                 <FileSpreadsheet className="w-8 h-8" />
@@ -221,7 +253,6 @@
 
                         <div className="p-6 space-y-8">
                             
-                            {/* Step 1: Upload */}
                             <div className="space-y-4">
                                 <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
                                     <span className="bg-blue-100 text-blue-600 w-6 h-6 rounded-full flex items-center justify-center text-sm">1</span>
@@ -248,7 +279,6 @@
                                 </div>
                             </div>
 
-                            {/* Step 2: Settings */}
                             {file && (
                                 <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
                                     <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
@@ -287,7 +317,6 @@
                                 </div>
                             )}
 
-                            {/* Error Message */}
                             {error && (
                                 <div className="p-4 bg-red-50 text-red-700 rounded-lg flex items-center gap-2">
                                     <AlertCircle className="w-5 h-5" />
@@ -295,7 +324,6 @@
                                 </div>
                             )}
 
-                            {/* Step 3: Preview & Download */}
                             {processedWorkbook && (
                                 <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
                                     <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-700">
@@ -314,8 +342,9 @@
                                                     <tr>
                                                         <th className="px-4 py-2">Col A</th>
                                                         <th className="px-4 py-2">Merged (B+C)</th>
-                                                        <th className="px-4 py-2">Mod. D</th>
-                                                        <th className="px-4 py-2">Col E</th>
+                                                        <th className="px-4 py-2">Modified Col D</th>
+                                                        <th className="px-4 py-2">Orig. Col E</th>
+                                                        <th className="px-4 py-2">Orig. Col F</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-100">
@@ -327,10 +356,10 @@
                                                                     <td 
                                                                         key={cIdx} 
                                                                         className={`px-4 py-2 whitespace-nowrap max-w-[200px] overflow-hidden text-ellipsis ${cIdx === 0 && isHeader ? 'text-blue-800 text-center' : 'text-left'}`}
-                                                                        colSpan={isHeader && cIdx === 0 ? 4 : 1}
-                                                                        style={{ display: (isHeader && cIdx > 0 && cIdx < 4) ? 'none' : 'table-cell' }}
+                                                                        colSpan={isHeader && cIdx === 0 ? 5 : 1}
+                                                                        style={{ display: (isHeader && cIdx > 0 && cIdx < 5) ? 'none' : 'table-cell' }}
                                                                     >
-                                                                        {cell || (isHeader && cIdx >= 4 ? "" : "-")}
+                                                                        {formatForPreview(cell) || (isHeader && cIdx >= 5 ? "" : "-")}
                                                                     </td>
                                                                 ))}
                                                             </tr>
@@ -361,5 +390,4 @@
         root.render(<App />);
     </script>
 </body>
-
 </html>
