@@ -163,7 +163,7 @@
                             const textD = getFormattedText(rowCells[3]);
                             const words = textD.split(/\s+/).filter(w => w.length > 0);
                             const firstFourWords = words.slice(0, 4).join(" ");
-                            const newColC = firstFourWords ? `${firstFourWords}': "";
+                            const newColC = firstFourWords ? `${firstFourWords} (Revenue)': "";
 
                             newRows.push([
                                 cloneCell(cellA),
